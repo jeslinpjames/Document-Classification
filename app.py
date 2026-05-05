@@ -10,6 +10,10 @@ import pickle
 import json
 import torch
 import base64
+import numpy as np
+import pandas as pd
+import plotly.express as px
+from sklearn.decomposition import PCA
 from PIL import Image
 from groq import Groq
 from sentence_transformers import SentenceTransformer, util
@@ -189,7 +193,7 @@ with tab2:
                     for k, v in extracted_data.items():
                         score = attribution_scores.get(k, 0)
                         
-                        # Set color intensity based on score (Using RGBA for dark/light mode compatibility)
+                        # Set color intensity based on score
                         if score > 0.5: bg_color = "rgba(16, 185, 129, 0.4)"     # Strong green
                         elif score > 0.3: bg_color = "rgba(16, 185, 129, 0.2)"   # Light green
                         elif score > 0.15: bg_color = "rgba(16, 185, 129, 0.05)" # Very faint green
@@ -197,7 +201,6 @@ with tab2:
                         
                         tooltip = f"Impact Score: {score:.2f}"
                         
-                        # FIX: Concatenated as single lines to prevent Markdown from turning it into a code block
                         html_content += f"<div style='background-color: {bg_color}; padding: 6px 10px; border-radius: 4px; margin-bottom: 6px;' title='{tooltip}'>"
                         html_content += f"<strong>{k}</strong>: {v} "
                         html_content += f"<span style='opacity: 0.6; font-size: 12px; float: right;'>{score:.2f}</span>"
@@ -227,3 +230,55 @@ with tab2:
                 
                     st.markdown("### 📊 Extracted Data")
                     st.json(extracted_data)
+
+                # --- PHASE 4: LATENT SPACE MAP (XAI) ---
+                st.markdown("---")
+                st.markdown("### 🌌 AI Brain Map (Latent Space)")
+                st.caption("See exactly where this document 'lives' in the AI's mathematical memory. PCA reduces 384 dimensions into a 2D map.")
+                
+                if len(memory) >= 1:
+                    with st.spinner("Mapping dimensions..."):
+                        # Gather all known vectors and the new one
+                        all_vectors = [item["vector"].numpy() for item in memory]
+                        all_labels = [item["label"] for item in memory]
+                        sizes = [10] * len(memory) # Standard size for known clusters
+                        
+                        # Add the newly uploaded document
+                        all_vectors.append(new_vector.numpy())
+                        all_labels.append("🌟 NEW UPLOAD")
+                        sizes.append(25) # Make the new one massive so it stands out
+                        
+                        # We need at least 2 points to draw a 2D PCA map
+                        if len(all_vectors) >= 2:
+                            # Compress dimensions
+                            pca = PCA(n_components=2)
+                            coords = pca.fit_transform(all_vectors)
+                            
+                            # Create DataFrame for plotting
+                            df = pd.DataFrame({
+                                "x": coords[:, 0],
+                                "y": coords[:, 1],
+                                "Class": all_labels,
+                                "Size": sizes
+                            })
+                            
+                            # Plot
+                            fig = px.scatter(
+                                df, x="x", y="y",
+                                color="Class",
+                                size="Size",
+                                hover_name="Class",
+                                title="Semantic Boundary Relationships"
+                            )
+                            # Clean up the chart's appearance
+                            fig.update_traces(textposition='top center')
+                            fig.update_layout(
+                                showlegend=True, 
+                                margin=dict(l=0, r=0, t=30, b=0),
+                                xaxis_title="Principal Component 1",
+                                yaxis_title="Principal Component 2"
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.info("Not enough classes in memory to generate a 2D map yet. Train more document types!")

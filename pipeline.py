@@ -157,7 +157,8 @@ def process_document(image_path, run_cli=False):
         "extracted_data": extracted_data,
         "best_label": best_label,
         "best_score": best_score,
-        "attribution_scores": attribution_scores
+        "attribution_scores": attribution_scores,
+        "new_vector": new_vector 
     }
 
 if __name__ == "__main__":
