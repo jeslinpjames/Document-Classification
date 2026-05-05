@@ -13,11 +13,19 @@ import base64
 from PIL import Image
 from groq import Groq
 from sentence_transformers import SentenceTransformer, util
+from dotenv import load_dotenv
 
 # --- 1. CONFIGURATION ---
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "apikey") # Put your key here
+# Load environment variables from .env file
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
 MEMORY_FILE = "text_memory.pkl"
 THRESHOLD = 0.50
+
+# Ensure the key exists
+if not GROQ_API_KEY:
+    st.error("API Key missing! Please add GROQ_API_KEY to your .env file.")
 
 # --- 2. INITIALIZE MODELS ---
 @st.cache_resource
@@ -68,7 +76,6 @@ with tab1:
                     st.write(f"**Source Images in this Class ({len(images)} total):**")
                     st.caption("💡 Click the arrows icon in the top right of any image to view it full screen and zoom in.")
                     
-                    # Create 3 columns to show up to 3 image previews side-by-side
                     cols = st.columns(min(3, len(images)))
                     for col_idx, img_path in enumerate(images[:3]): 
                         with cols[col_idx]:
@@ -112,6 +119,8 @@ with tab2:
             
         with col2:
             if st.button("🚀 Run Extraction & Classification", type="primary", use_container_width=True):
+                
+                # --- PHASE 1: EXTRACTION ---
                 with st.spinner("Agent 2 (Groq) is extracting data..."):
                     try:
                         base64_image = encode_image(uploaded_file)
@@ -140,12 +149,14 @@ with tab2:
                         st.error(f"Extraction failed: {e}")
                         st.stop()
 
+                # --- PHASE 2: VECTORIZATION & CLASSIFICATION ---
                 with st.spinner("Agent 1 (MiniLM) is analyzing vectors..."):
                     flat_string = " | ".join([f"{k}: {v}" for k, v in extracted_data.items()])
                     new_vector = embed_model.encode(flat_string, convert_to_tensor=True).cpu()
                     
                     best_score = -1.0
                     best_label = "Unknown"
+                    winning_vector = None
                     memory = load_memory()
                     
                     for item in memory:
@@ -153,11 +164,52 @@ with tab2:
                         if score > best_score:
                             best_score = score
                             best_label = item["label"]
+                            winning_vector = item["vector"]
 
                 st.markdown("---")
+                
+                # --- PHASE 3: RESULT & ATTRIBUTION RENDERING ---
                 if best_score >= THRESHOLD:
                     st.success(f"### ✅ Classified as: **{best_label}**")
                     st.progress(best_score, text=f"Confidence Score: {best_score:.2f}")
+                    
+                    # Calculate Semantic Attribution
+                    attribution_scores = {}
+                    for k, v in extracted_data.items():
+                        field_text = f"{k}: {v}"
+                        field_vector = embed_model.encode(field_text, convert_to_tensor=True).cpu()
+                        field_score = util.cos_sim(field_vector, winning_vector).item()
+                        attribution_scores[k] = field_score
+                        
+                    # Render the Heatmap
+                    st.markdown("### 🔍 Semantic Feature Attribution")
+                    st.caption("Fields highlighted in green heavily influenced the AI's classification choice.")
+                    
+                    html_content = "<div style='font-family: monospace; font-size: 15px; line-height: 1.6; border: 1px solid #333; padding: 10px; border-radius: 8px;'>"
+                    for k, v in extracted_data.items():
+                        score = attribution_scores.get(k, 0)
+                        
+                        # Set color intensity based on score (Using RGBA for dark/light mode compatibility)
+                        if score > 0.5: bg_color = "rgba(16, 185, 129, 0.4)"     # Strong green
+                        elif score > 0.3: bg_color = "rgba(16, 185, 129, 0.2)"   # Light green
+                        elif score > 0.15: bg_color = "rgba(16, 185, 129, 0.05)" # Very faint green
+                        else: bg_color = "transparent"
+                        
+                        tooltip = f"Impact Score: {score:.2f}"
+                        
+                        # FIX: Concatenated as single lines to prevent Markdown from turning it into a code block
+                        html_content += f"<div style='background-color: {bg_color}; padding: 6px 10px; border-radius: 4px; margin-bottom: 6px;' title='{tooltip}'>"
+                        html_content += f"<strong>{k}</strong>: {v} "
+                        html_content += f"<span style='opacity: 0.6; font-size: 12px; float: right;'>{score:.2f}</span>"
+                        html_content += "</div>"
+                        
+                    html_content += "</div>"
+                    st.markdown(html_content, unsafe_allow_html=True)
+                    
+                    # Optional: Expandable raw JSON
+                    with st.expander("View Raw JSON Output"):
+                        st.json(extracted_data)
+
                 else:
                     st.warning(f"### ⚠️ Unknown Document")
                     st.write(f"Top match was **{best_label}** (Score: {best_score:.2f}, below {THRESHOLD} threshold)")
@@ -168,10 +220,10 @@ with tab2:
                             "label": new_class,
                             "vector": new_vector,
                             "raw_text": flat_string,
-                            "images": [] # New items don't have training images mapped
+                            "images": []
                         })
                         save_memory(memory)
                         st.success(f"Brain updated with {new_class}!")
                 
-                st.markdown("### 📊 Extracted Data")
-                st.json(extracted_data)
+                    st.markdown("### 📊 Extracted Data")
+                    st.json(extracted_data)
